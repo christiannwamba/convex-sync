@@ -4,14 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+Prefer pnpm over npm
+
 ### Development
-- `npm run dev` - Start the development server with Turbopack at http://localhost:3000
-- `npm run build` - Build the production application with Turbopack
-- `npm run start` - Start the production server
+- `pnpm run dev` - Start the development server with Turbopack at http://localhost:3000
+- `pnpm run build` - Build the production application with Turbopack
+- `pnpm run start` - Start the production server
 
 ### Code Quality
-- `npm run lint` - Run Biome linter to check code quality
-- `npm run format` - Format code using Biome formatter
+- `pnpm run lint` - Run Biome linter to check code quality
+- `pnpm run format` - Format code using Biome formatter
 
 ## Architecture
 
