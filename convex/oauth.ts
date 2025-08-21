@@ -383,3 +383,102 @@ export const _refreshUserTokens = internalMutation({
     };
   },
 });
+
+// Public query to check if user exists
+export const checkUserExists = query({
+  args: {
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .first();
+
+    if (!user) {
+      return {
+        exists: false,
+        isAuthenticated: false,
+      };
+    }
+
+    const hasValidTokens = user.googleAccessToken && user.googleRefreshToken;
+    const isTokenValid = user.tokenExpiresAt ? user.tokenExpiresAt > Date.now() : false;
+
+    return {
+      exists: true,
+      isAuthenticated: !!hasValidTokens,
+      tokenExpired: !isTokenValid,
+      user: {
+        _id: user._id,
+        email: user.email,
+        name: user.name,
+      },
+    };
+  },
+});
+
+// Public mutation to delete all user data
+export const deleteAllUserData = action({
+  args: {
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.runQuery(internal.oauth._getUserTokensByEmail, {
+      email: args.email,
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Delete all user data using internal mutation
+    await ctx.runMutation(internal.oauth._deleteAllUserDataInternal, {
+      userId: user._id,
+      email: args.email,
+    });
+
+    return {
+      success: true,
+      message: `All data for ${args.email} has been deleted`,
+    };
+  },
+});
+
+// Internal mutation to delete all user data
+export const _deleteAllUserDataInternal = internalMutation({
+  args: {
+    userId: v.id("users"),
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Delete all calendar events for this user
+    const calendarEvents = await ctx.db
+      .query("calendarEvents")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    for (const event of calendarEvents) {
+      await ctx.db.delete(event._id);
+    }
+
+    // Delete any OAuth sessions for this user
+    const oauthSessions = await ctx.db
+      .query("oauthSessions")
+      .filter((q) => q.eq(q.field("userEmail"), args.email))
+      .collect();
+
+    for (const session of oauthSessions) {
+      await ctx.db.delete(session._id);
+    }
+
+    // Delete the user record
+    await ctx.db.delete(args.userId);
+
+    return {
+      deletedCalendarEvents: calendarEvents.length,
+      deletedOAuthSessions: oauthSessions.length,
+      userDeleted: true,
+    };
+  },
+});

@@ -2,7 +2,7 @@
 
 import { useQuery, useAction } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
 interface CalendarEvent {
@@ -26,9 +26,12 @@ interface CalendarEvent {
 
 export default function Dashboard() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const email = searchParams.get('email');
   const [syncStatus, setSyncStatus] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const authStatus = useQuery(api.calendar.getUserAuthStatus,
     email ? { email } : "skip"
@@ -39,6 +42,7 @@ export default function Dashboard() {
   );
 
   const syncCalendar = useAction(api.calendar.refreshUserCalendar);
+  const deleteUserData = useAction(api.oauth.deleteAllUserData);
 
   const handleSync = async () => {
     if (!email) return;
@@ -58,6 +62,27 @@ export default function Dashboard() {
       setSyncStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!email) return;
+
+    setIsLoggingOut(true);
+
+    try {
+      const result = await deleteUserData({ email });
+      
+      if (result.success) {
+        // Redirect to homepage after successful logout
+        router.push('/');
+      }
+    } catch (error) {
+      console.error('Logout failed:', error);
+      alert(`Logout failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsLoggingOut(false);
+      setShowLogoutConfirm(false);
     }
   };
 
@@ -111,12 +136,22 @@ export default function Dashboard() {
               <h1 className="text-3xl font-bold text-gray-900">Calendar Dashboard</h1>
               <p className="text-gray-600 mt-1">Welcome, {email}</p>
             </div>
-            <a
-              href="/"
-              className="text-blue-600 hover:text-blue-800 text-sm"
-            >
-              ← Back to home
-            </a>
+            <div className="flex items-center space-x-4">
+              <a
+                href="/"
+                className="text-blue-600 hover:text-blue-800 text-sm"
+              >
+                ← Back to home
+              </a>
+              {authStatus?.isAuthenticated && (
+                <button
+                  onClick={() => setShowLogoutConfirm(true)}
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                >
+                  Logout & Delete Data
+                </button>
+              )}
+            </div>
           </div>
         </header>
 
@@ -242,6 +277,44 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        {/* Logout Confirmation Modal */}
+        {showLogoutConfirm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                Confirm Logout & Data Deletion
+              </h3>
+              <p className="text-gray-600 mb-6">
+                This will permanently delete all your data including:
+              </p>
+              <ul className="list-disc list-inside text-sm text-gray-600 mb-6 space-y-1">
+                <li>Your user account</li>
+                <li>All synced calendar events</li>
+                <li>OAuth tokens and sessions</li>
+              </ul>
+              <p className="text-red-600 text-sm font-medium mb-6">
+                This action cannot be undone.
+              </p>
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowLogoutConfirm(false)}
+                  disabled={isLoggingOut}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 font-medium transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleLogout}
+                  disabled={isLoggingOut}
+                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md font-medium transition-colors disabled:opacity-50"
+                >
+                  {isLoggingOut ? 'Deleting...' : 'Delete All Data'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
