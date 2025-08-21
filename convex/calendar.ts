@@ -1,28 +1,44 @@
 import { v } from "convex/values";
-import { action, internalMutation, query, ActionCtx, QueryCtx, internalAction, mutation } from "./_generated/server";
-import { api, internal } from "./_generated/api";
-import { Id, Doc } from "./_generated/dataModel";
+import { action, internalMutation, query, internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { Doc } from "./_generated/dataModel";
 import { isTokenExpired } from "./helpers/tokenHelpers";
 import {
   fetchGoogleCalendarEvents as fetchEventsFromGoogle,
   refreshGoogleAccessToken,
-  type GoogleCalendarEvent
+  type GoogleCalendarEvent,
+  type GoogleCalendarEventsBatch
 } from "./helpers/googleApiHelpers";
-import { vWorkflowId, WorkflowManager } from "@convex-dev/workflow";
+import { WorkflowManager } from "@convex-dev/workflow";
+import { Workpool } from "@convex-dev/workpool";
 import { components } from "./_generated/api";
 import { refreshAccessToken } from "./oauth";
 
 export const workflow = new WorkflowManager(components.workflow);
 
-// Calendar sync workflow
+// Work Pool for Google Calendar API rate limiting
+export const calendarApiPool = new Workpool(components.calendarApiWorkpool, {
+  maxParallelism: 5, // Google Calendar API rate limit consideration
+  retryActionsByDefault: true,
+  defaultRetryBehavior: {
+    maxAttempts: 3,
+    initialBackoffMs: 1000,
+    base: 2
+  },
+});
+
+// Calendar sync workflow using Work Pool
 export const _syncUserCalendarWorkflow = workflow.define({
-  args: { userEmail: v.string() },
+  args: {
+    userEmail: v.string(),
+    maxEventsPerBatch: v.optional(v.number()),
+  },
   handler: async (step, args): Promise<{
     success: boolean;
     message: string;
-    eventsCount: number;
+    initialBatchStarted: boolean;
   }> => {
-    // Step 1: Get user by email with retry
+    // Step 1: Get user by email
     const user = await step.runQuery(internal.oauth._getUserTokensByEmail,
       { email: args.userEmail },
     );
@@ -31,28 +47,30 @@ export const _syncUserCalendarWorkflow = workflow.define({
       throw new Error("User not found");
     }
 
-    // Step 2: Get user with fresh tokens with retry
+    // Step 2: Get fresh tokens
     const { accessToken } = await step.runAction(internal.calendar._getUserWithFreshTokens,
       { userId: user._id },
       { retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 } }
     );
 
-    // Step 3: Fetch events from Google with retry
-    const events = await step.runAction(internal.calendar._fetchGoogleCalendarEvents,
-      {
-        accessToken,
-        maxResults: 100,
-      },
-      { retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 } }
-    );
+    // Step 3: Clear existing events before starting fresh sync
+    await step.runMutation(internal.calendar._clearUserEvents, {
+      userId: user._id,
+    });
 
+    // Step 4: Start the first batch through work pool
+    const batchResult = await step.runAction(internal.calendar._startPaginatedSync, {
+      userId: user._id,
+      accessToken,
+      userEmail: args.userEmail,
+      maxEventsPerBatch: args.maxEventsPerBatch || 250,
+    });
 
-    // Step 4: Store events in database with retry
-    const result = await step.runMutation(internal.calendar._batchRefreshUserCalendar,
-      { userEmail: args.userEmail, events },
-    );
-
-    return result;
+    return {
+      success: true,
+      message: `Paginated calendar sync started for ${args.userEmail}. Initial batch work ID: ${batchResult.workId}`,
+      initialBatchStarted: true,
+    };
   },
 });
 
@@ -79,45 +97,202 @@ export const _getUserWithFreshTokens = internalAction({
   },
 });
 
-// Internal action to fetch Google Calendar events
-export const _fetchGoogleCalendarEvents = internalAction({
+
+// Action to start paginated sync process
+export const _startPaginatedSync = internalAction({
   args: {
+    userId: v.id("users"),
     accessToken: v.string(),
-    maxResults: v.number(),
+    userEmail: v.string(),
+    maxEventsPerBatch: v.number(),
   },
-  handler: async (ctx, args): Promise<GoogleCalendarEvent[]> => {
-    const timeMin = new Date().toISOString();
-    console.log("fetching events");
-    return await fetchEventsFromGoogle(args.accessToken, {
-      maxResults: args.maxResults,
-      timeMin,
-    });
+  handler: async (ctx, args): Promise<{ workId: string }> => {
+    console.log(`Starting paginated sync for user ${args.userEmail}`);
+
+    // Start the first batch through work pool
+    const workId = await calendarApiPool.enqueueAction(
+      ctx,
+      internal.calendar._fetchAndStoreBatch,
+      {
+        userId: args.userId,
+        accessToken: args.accessToken,
+        userEmail: args.userEmail,
+        maxResults: args.maxEventsPerBatch,
+        pageToken: undefined, // First batch
+        batchNumber: 1,
+      }
+    );
+
+    return { workId };
+  },
+});
+
+// Action to fetch and store a single batch of events
+export const _fetchAndStoreBatch = internalAction({
+  args: {
+    userId: v.id("users"),
+    accessToken: v.string(),
+    userEmail: v.string(),
+    maxResults: v.number(),
+    pageToken: v.optional(v.string()),
+    batchNumber: v.number(),
+  },
+  handler: async (ctx, args): Promise<{
+    success: boolean;
+    eventsStored: number;
+    nextPageToken?: string;
+    batchNumber: number;
+  }> => {
+    console.log(`Fetching batch ${args.batchNumber} for ${args.userEmail}`);
+
+    try {
+      // Fetch events batch
+      const timeMin = new Date().toISOString();
+      const batch = await fetchEventsFromGoogle(args.accessToken, {
+        maxResults: args.maxResults,
+        timeMin,
+        pageToken: args.pageToken,
+      });
+
+      // Store events if any
+      let eventsStored = 0;
+      if (batch.events.length > 0) {
+        await ctx.runMutation(internal.calendar._storeBatchEvents, {
+          userId: args.userId,
+          events: batch.events,
+          batchNumber: args.batchNumber,
+        });
+        eventsStored = batch.events.length;
+      }
+
+      // If there's a next page, enqueue the next batch
+      if (batch.nextPageToken) {
+        console.log(`Enqueueing batch ${args.batchNumber + 1} for ${args.userEmail}`);
+        await calendarApiPool.enqueueAction(
+          ctx,
+          internal.calendar._fetchAndStoreBatch,
+          {
+            userId: args.userId,
+            accessToken: args.accessToken,
+            userEmail: args.userEmail,
+            maxResults: args.maxResults,
+            pageToken: batch.nextPageToken,
+            batchNumber: args.batchNumber + 1,
+          }
+        );
+      } else {
+        console.log(`Finished paginated sync for ${args.userEmail} after ${args.batchNumber} batches`);
+      }
+
+      return {
+        success: true,
+        eventsStored,
+        nextPageToken: batch.nextPageToken,
+        batchNumber: args.batchNumber,
+      };
+    } catch (error) {
+      console.error(`Batch ${args.batchNumber} failed for ${args.userEmail}:`, error);
+      throw error;
+    }
+  },
+});
+
+// Internal mutation to store batch events
+export const _storeBatchEvents = internalMutation({
+  args: {
+    userId: v.id("users"),
+    events: v.array(
+      v.object({
+        id: v.string(),
+        summary: v.string(),
+        description: v.optional(v.string()),
+        start: v.object({
+          dateTime: v.optional(v.string()),
+          date: v.optional(v.string()),
+          timeZone: v.optional(v.string()),
+        }),
+        end: v.object({
+          dateTime: v.optional(v.string()),
+          date: v.optional(v.string()),
+          timeZone: v.optional(v.string()),
+        }),
+        location: v.optional(v.string()),
+        status: v.string(),
+      })
+    ),
+    batchNumber: v.number(),
+  },
+  handler: async (ctx, args) => {
+    console.log(`Storing ${args.events.length} events from batch ${args.batchNumber}`);
+
+    const lastSyncedAt = Date.now();
+    for (const event of args.events) {
+      await ctx.db.insert("calendarEvents", {
+        userId: args.userId,
+        googleEventId: event.id,
+        summary: event.summary || 'Untitled Event',
+        description: event.description,
+        start: event.start,
+        end: event.end,
+        location: event.location,
+        status: event.status,
+        lastSyncedAt,
+      });
+    }
+
+    return { eventsStored: args.events.length };
+  },
+});
+
+// Internal mutation to clear user events before sync
+export const _clearUserEvents = internalMutation({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    console.log(`Clearing existing events for user ${args.userId}`);
+
+    const existingEvents = await ctx.db
+      .query("calendarEvents")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    for (const event of existingEvents) {
+      await ctx.db.delete(event._id);
+    }
+
+    return { deletedCount: existingEvents.length };
   },
 });
 
 // Helper function for calendar refresh logic (can be reused)
 
 
+// Calendar refresh with unlimited events and rate limiting
 export const refreshUserCalendar = action({
   args: {
     userEmail: v.string(),
+    maxEventsPerBatch: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<{
     success: boolean;
     message: string;
-    eventsCount: number;
-}> => {
+    workflowId: string;
+  }> => {
     // Start the calendar sync workflow
-    const workflowId = await workflow.start(ctx, internal.calendar._syncUserCalendarWorkflow, {
-      userEmail: args.userEmail,
-    });
+    const workflowId = await workflow.start(
+      ctx,
+      internal.calendar._syncUserCalendarWorkflow,
+      {
+        userEmail: args.userEmail,
+        maxEventsPerBatch: args.maxEventsPerBatch || 250,
+      }
+    );
 
-    // For now, return a simple success message with the workflow ID
-    // In a real app, you might want to poll the workflow status
     return {
       success: true,
-      message: `Calendar sync workflow started with ID: ${workflowId}`,
-      eventsCount: 0, // Will be updated when workflow completes
+      message: `Calendar sync started for ${args.userEmail}. This will fetch ALL events in the background using rate-limited API calls.`,
+      workflowId,
     };
   },
 });
@@ -180,88 +355,6 @@ export const getUserAuthStatus = query({
         name: user.name,
         tokenExpiresAt: user.tokenExpiresAt,
       },
-    };
-  },
-});
-
-// ================================
-// CONSOLIDATED INTERNAL OPERATIONS
-// ================================
-
-/**
- * Consolidated calendar refresh operation
- * Combines user lookup, event clearing, and batch event storage in single transaction
- */
-export const _batchRefreshUserCalendar = internalMutation({
-  args: {
-    userEmail: v.string(),
-    events: v.array(
-      v.object({
-        // Only validate the fields we actually need/use
-        id: v.string(),
-        summary: v.string(),
-        description: v.optional(v.string()),
-        start: v.object({
-          dateTime: v.optional(v.string()),
-          date: v.optional(v.string()),
-          timeZone: v.optional(v.string()),
-        }),
-        end: v.object({
-          dateTime: v.optional(v.string()),
-          date: v.optional(v.string()),
-          timeZone: v.optional(v.string()),
-        }),
-        location: v.optional(v.string()),
-        status: v.string(),
-      })
-    ),
-  },
-  handler: async (ctx, args) => {
-    // Get user by email
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", args.userEmail))
-      .first();
-
-    if (!user) {
-      throw new Error("User not found");
-    }
-
-    // Clear existing events for this user
-    const existingEvents = await ctx.db
-      .query("calendarEvents")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .collect();
-
-    for (const event of existingEvents) {
-      await ctx.db.delete(event._id);
-    }
-
-    // Store new events in batch
-    const storedEventIds: Id<"calendarEvents">[] = [];
-    const lastSyncedAt = Date.now();
-
-    for (const event of args.events) {
-      const eventId = await ctx.db.insert("calendarEvents", {
-        userId: user._id,
-        googleEventId: event.id,
-        summary: event.summary || 'Untitled Event',
-        description: event.description,
-        start: event.start,
-        end: event.end,
-        location: event.location,
-        status: event.status,
-        lastSyncedAt,
-      });
-      storedEventIds.push(eventId);
-    }
-
-    return {
-      success: true,
-      message: `Synced ${args.events.length} calendar events`,
-      eventsCount: args.events.length,
-      userId: user._id,
-      storedEventIds,
     };
   },
 });

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@convex-dev/workflow": "^0.2.6",
+    "@convex-dev/workpool": "^0.2.18",
     "convex": "^1.25.4",
     "next": "15.5.0",
     "react": "19.1.0",

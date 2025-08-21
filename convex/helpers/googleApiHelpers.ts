@@ -210,23 +210,34 @@ function cleanCalendarEvent(event: RawGoogleCalendarEvent): GoogleCalendarEvent 
   };
 }
 
+export interface GoogleCalendarEventsBatch {
+  events: GoogleCalendarEvent[];
+  nextPageToken?: string;
+  totalItems?: number;
+}
+
 /**
- * Fetch calendar events from Google Calendar API
+ * Fetch calendar events from Google Calendar API with pagination support
  */
 export async function fetchGoogleCalendarEvents(
   accessToken: string,
   options: {
     maxResults?: number;
     timeMin?: string;
+    pageToken?: string;
   } = {}
-): Promise<GoogleCalendarEvent[]> {
-  const { maxResults = 50, timeMin = new Date().toISOString() } = options;
+): Promise<GoogleCalendarEventsBatch> {
+  const { maxResults = 250, timeMin = new Date().toISOString(), pageToken } = options;
 
   const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
   url.searchParams.set('timeMin', timeMin);
   url.searchParams.set('maxResults', maxResults.toString());
   url.searchParams.set('singleEvents', 'true');
   url.searchParams.set('orderBy', 'startTime');
+  
+  if (pageToken) {
+    url.searchParams.set('pageToken', pageToken);
+  }
 
   try {
     const response = await fetch(url.toString(), {
@@ -241,14 +252,22 @@ export async function fetchGoogleCalendarEvents(
         throw new Error(`Failed to fetch calendar events: ${error}`);
       }
 
-      const data = await response.json() as { items?: RawGoogleCalendarEvent[] };
+      const data = await response.json() as { 
+        items?: RawGoogleCalendarEvent[];
+        nextPageToken?: string;
+      };
+      
       const rawEvents = data.items || [];
-      return rawEvents.map(cleanCalendarEvent);
+      return {
+        events: rawEvents.map(cleanCalendarEvent),
+        nextPageToken: data.nextPageToken,
+      };
   } catch (error) {
     console.error('Error fetching calendar events:', error);
     throw error;
   }
 }
+
 
 /**
  * Make authenticated request to Google API with automatic token refresh

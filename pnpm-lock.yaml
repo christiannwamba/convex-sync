@@ -11,6 +11,9 @@ importers:
       '@convex-dev/workflow':
         specifier: ^0.2.6
         version: 0.2.6(@convex-dev/workpool@0.2.18(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0)))(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0))
+      '@convex-dev/workpool':
+        specifier: ^0.2.18
+        version: 0.2.18(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0))
       convex:
         specifier: ^1.25.4
         version: 1.25.4(react@19.1.0)
