@@ -1,22 +1,41 @@
 "use client";
 
-import { useAction } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const router = useRouter();
   const initiateOAuth = useAction(api.oauth.initiateGoogleOAuth);
   
   const [userEmail, setUserEmail] = useState("");
+  const [isCheckingUser, setIsCheckingUser] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  // Check user existence when email is entered
+  const userExists = useQuery(
+    api.oauth.checkUserExists,
+    userEmail.includes('@') ? { email: userEmail.trim() } : "skip"
+  );
 
   const handleGoogleAuth = async (e: FormEvent) => {
     e.preventDefault();
     if (!userEmail.trim()) return;
 
+    const email = userEmail.trim();
+
+    // Check if user exists and is authenticated
+    if (userExists?.exists && userExists?.isAuthenticated) {
+      // User exists and is authenticated, redirect to dashboard
+      router.push(`/dashboard?email=${encodeURIComponent(email)}`);
+      return;
+    }
+
+    // If user doesn't exist or isn't authenticated, proceed with OAuth
     setIsAuthenticating(true);
     try {
-      const result = await initiateOAuth({ userEmail: userEmail.trim() });
+      const result = await initiateOAuth({ userEmail: email });
       // Redirect to Google OAuth
       window.location.href = result.oauthUrl;
     } catch (error) {
@@ -61,12 +80,37 @@ export default function Home() {
               className={`w-full font-medium py-3 px-4 rounded-lg transition-colors ${
                 isAuthenticating
                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : userExists?.exists && userExists?.isAuthenticated
+                  ? 'bg-green-500 hover:bg-green-600 text-white'
                   : 'bg-blue-500 hover:bg-blue-600 text-white'
               }`}
             >
-              {isAuthenticating ? 'Connecting...' : 'Connect with Google Calendar'}
+              {isAuthenticating 
+                ? 'Connecting...' 
+                : userExists?.exists && userExists?.isAuthenticated
+                ? 'Go to Dashboard'
+                : 'Connect with Google Calendar'
+              }
             </button>
           </form>
+          
+          {/* User status indicator */}
+          {userEmail.includes('@') && userExists && (
+            <div className={`mt-4 p-3 rounded-lg text-sm ${
+              userExists.exists && userExists.isAuthenticated
+                ? 'bg-green-50 text-green-800 border border-green-200'
+                : userExists.exists && !userExists.isAuthenticated
+                ? 'bg-yellow-50 text-yellow-800 border border-yellow-200'
+                : 'bg-gray-50 text-gray-600 border border-gray-200'
+            }`}>
+              {userExists.exists && userExists.isAuthenticated
+                ? `✓ Found your account! Click the button above to go to your dashboard.`
+                : userExists.exists && !userExists.isAuthenticated
+                ? `⚠ Found your account but tokens expired. Click to re-authenticate.`
+                : `New user detected. Click to connect with Google Calendar.`
+              }
+            </div>
+          )}
           
           <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <h3 className="font-medium text-blue-900 mb-2">What happens next?</h3>
