@@ -14,10 +14,7 @@ import type {
   FunctionReference,
 } from "convex/server";
 import type * as calendar from "../calendar.js";
-import type * as calendarQueries from "../calendarQueries.js";
-import type * as messages from "../messages.js";
 import type * as oauth from "../oauth.js";
-import type * as oauthQueries from "../oauthQueries.js";
 
 /**
  * A utility for referencing Convex functions in your app's API.
@@ -29,10 +26,7 @@ import type * as oauthQueries from "../oauthQueries.js";
  */
 declare const fullApi: ApiFromModules<{
   calendar: typeof calendar;
-  calendarQueries: typeof calendarQueries;
-  messages: typeof messages;
   oauth: typeof oauth;
-  oauthQueries: typeof oauthQueries;
 }>;
 export declare const api: FilterApi<
   typeof fullApi,

@@ -30,11 +30,11 @@ export default function Dashboard() {
   const [syncStatus, setSyncStatus] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const authStatus = useQuery(api.calendarQueries.getUserAuthStatus, 
+  const authStatus = useQuery(api.calendar.getUserAuthStatus,
     email ? { email } : "skip"
   );
-  
-  const calendarEvents = useQuery(api.calendarQueries.getUserCalendarEventsByEmail,
+
+  const calendarEvents = useQuery(api.calendar.getUserCalendarEventsByEmail,
     email ? { email, limit: 20 } : "skip"
   );
 
@@ -42,17 +42,17 @@ export default function Dashboard() {
 
   const handleSync = async () => {
     if (!email) return;
-    
+
     setIsLoading(true);
     setSyncStatus('Syncing calendar events...');
-    
+
     try {
       const result = await syncCalendar({ userEmail: email });
-      
+
       if (result.success) {
         setSyncStatus(`Successfully synced ${result.eventsCount} events!`);
       } else {
-        setSyncStatus(`Sync failed: ${result.error}`);
+        setSyncStatus(`Sync failed: ${result.message}`);
       }
     } catch (error) {
       setSyncStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -64,12 +64,12 @@ export default function Dashboard() {
   const formatEventTime = (event: CalendarEvent) => {
     const startTime = event.start.dateTime || event.start.date;
     const endTime = event.end.dateTime || event.end.date;
-    
+
     if (!startTime) return 'Time TBD';
-    
+
     const start = new Date(startTime);
     const end = endTime ? new Date(endTime) : null;
-    
+
     if (event.start.date && event.end.date) {
       // All-day event
       return `All day - ${start.toDateString()}`;
@@ -77,12 +77,12 @@ export default function Dashboard() {
       // Timed event
       const timeOptions: Intl.DateTimeFormatOptions = {
         weekday: 'short',
-        month: 'short', 
+        month: 'short',
         day: 'numeric',
         hour: 'numeric',
         minute: '2-digit',
       };
-      
+
       if (end && start.toDateString() !== end.toDateString()) {
         return `${start.toLocaleDateString('en-US', timeOptions)} - ${end.toLocaleDateString('en-US', timeOptions)}`;
       } else {
@@ -111,8 +111,8 @@ export default function Dashboard() {
               <h1 className="text-3xl font-bold text-gray-900">Calendar Dashboard</h1>
               <p className="text-gray-600 mt-1">Welcome, {email}</p>
             </div>
-            <a 
-              href="/" 
+            <a
+              href="/"
               className="text-blue-600 hover:text-blue-800 text-sm"
             >
               ← Back to home
@@ -173,7 +173,7 @@ export default function Dashboard() {
             </div>
             {syncStatus && (
               <div className={`mt-4 p-3 rounded-md text-sm ${
-                syncStatus.includes('Successfully') 
+                syncStatus.includes('Successfully')
                   ? 'bg-green-50 text-green-800 border border-green-200'
                   : syncStatus.includes('Error') || syncStatus.includes('failed')
                   ? 'bg-red-50 text-red-800 border border-red-200'
@@ -191,7 +191,7 @@ export default function Dashboard() {
             <h2 className="text-xl font-semibold">Your Calendar Events</h2>
             <p className="text-gray-600 text-sm mt-1">Recent events from your Google Calendar</p>
           </div>
-          
+
           <div className="p-6">
             {calendarEvents === undefined ? (
               <div className="space-y-4">
@@ -234,7 +234,7 @@ export default function Dashboard() {
                 </div>
                 <h3 className="text-lg font-medium text-gray-900 mb-2">No events found</h3>
                 <p className="text-gray-500">
-                  {authStatus?.isAuthenticated 
+                  {authStatus?.isAuthenticated
                     ? "Try syncing your calendar to fetch events"
                     : "Connect your Google Calendar to see events"}
                 </p>

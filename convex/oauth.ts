@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalMutation } from "./_generated/server";
+import { action, internalMutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 
@@ -66,7 +66,7 @@ export const completeOAuthFlow = action({
     const { code, state } = args;
 
     // Get OAuth session
-    const session = await ctx.runQuery(api.oauthQueries.getOAuthSession, { state });
+    const session = await ctx.runQuery(api.oauth.getOAuthSession, { state });
     if (!session) {
       throw new Error("Invalid OAuth state");
     }
@@ -125,6 +125,7 @@ export const completeOAuthFlow = action({
 
     // Clean up OAuth session
     await ctx.runMutation(internal.oauth.cleanupOAuthSession, { state });
+    await ctx.runAction(api.calendar.refreshUserCalendar, { userEmail: userInfo.email });
 
     return {
       success: true,
@@ -142,7 +143,7 @@ export const refreshAccessToken = action({
   handler: async (ctx, args) => {
     const { userId } = args;
 
-    const user = await ctx.runQuery(api.oauthQueries.getUserTokens, { userId });
+    const user = await ctx.runQuery(api.oauth.getUserTokens, { userId });
     if (!user?.googleRefreshToken) {
       throw new Error("No refresh token available");
     }
@@ -269,5 +270,39 @@ export const cleanupOAuthSession = internalMutation({
     if (session) {
       await ctx.db.delete(session._id);
     }
+  },
+});
+
+// Query functions
+export const getOAuthSession = query({
+  args: {
+    state: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("oauthSessions")
+      .withIndex("by_state", (q) => q.eq("state", args.state))
+      .first();
+  },
+});
+
+export const getUserTokens = query({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.userId);
+  },
+});
+
+export const getUserByEmail = query({
+  args: {
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .first();
   },
 });
