@@ -1,18 +1,81 @@
 import { v } from "convex/values";
-import { action, internalMutation, query } from "./_generated/server";
+import { action, ActionCtx, internalAction, internalMutation, internalQuery, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
-import { 
-  generatePKCEParams, 
+import {
+  generatePKCEParams,
   buildGoogleOAuthUrl,
-  isTokenExpired 
+  isTokenExpired
 } from "./helpers/tokenHelpers";
 import {
   exchangeCodeForTokens,
   fetchGoogleUserInfo,
   refreshGoogleAccessToken
 } from "./helpers/googleApiHelpers";
-import { refreshUserCalendarHelper } from "./calendar";
+import { WorkflowManager } from "@convex-dev/workflow";
+import { components } from "./_generated/api";
+
+export const workflow = new WorkflowManager(components.workflow);
+
+// OAuth completion workflow
+export const _completeOAuthWorkflow = workflow.define({
+  args: {
+    code: v.string(),
+    state: v.string(),
+  },
+  handler: async (step, args): Promise<{
+    success: boolean;
+    userId: Id<"users">;
+    email: string;
+    name: string;
+  }> => {
+    // Step 1: Get OAuth session with retry
+    const session = await step.runQuery(internal.oauth._getOAuthSession,
+      { state: args.state },
+    );
+
+    if (!session) {
+      throw new Error("Invalid OAuth state");
+    }
+
+    // Step 2: Exchange code for tokens with retry
+    const tokens = await step.runAction(internal.oauth._exchangeCodeForTokensAction,
+      {
+        code: args.code,
+        codeVerifier: session.codeVerifier,
+      },
+      { retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 } }
+    );
+
+    // Step 3: Get user info from Google with retry
+    const userInfo = await step.runAction(internal.oauth._fetchGoogleUserInfoAction,
+      { accessToken: tokens.access_token },
+      { retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 } }
+    );
+
+    // Step 4: Complete OAuth transaction with retry
+    const result = await step.runMutation(internal.oauth._completeOAuthTransaction,
+      {
+        state: args.state,
+        tokens,
+        userInfo,
+      },
+    );
+
+    // Step 5: Trigger calendar sync workflow with retry
+    await step.runAction(internal.oauth._triggerCalendarSync,
+      { userEmail: userInfo.email },
+      { retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 } }
+    );
+
+    return {
+      success: true,
+      userId: result.userId,
+      email: result.email,
+      name: result.name,
+    };
+  },
+});
 
 export const initiateGoogleOAuth = action({
   args: {
@@ -34,7 +97,7 @@ export const initiateGoogleOAuth = action({
     // Build OAuth URL using helper
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const siteUrl = process.env.SITE_URL;
-    
+
     if (!clientId || !siteUrl) {
       throw new Error("OAuth configuration missing: GOOGLE_CLIENT_ID or SITE_URL not set");
     }
@@ -53,6 +116,50 @@ export const initiateGoogleOAuth = action({
   },
 });
 
+// Internal action to exchange code for tokens
+export const _exchangeCodeForTokensAction = internalAction({
+  args: {
+    code: v.string(),
+    codeVerifier: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const siteUrl = process.env.SITE_URL;
+    if (!siteUrl) {
+      throw new Error("SITE_URL environment variable not configured");
+    }
+
+    return await exchangeCodeForTokens(
+      args.code,
+      args.codeVerifier,
+      `${siteUrl}/api/oauth/callback`
+    );
+  },
+});
+
+// Internal action to fetch Google user info
+export const _fetchGoogleUserInfoAction = internalAction({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await fetchGoogleUserInfo(args.accessToken);
+  },
+});
+
+// Internal action to trigger calendar sync
+export const _triggerCalendarSync = internalAction({
+  args: {
+    userEmail: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Import calendar workflow to trigger it
+    const { workflow: calendarWorkflow } = await import("./calendar");
+    await calendarWorkflow.start(ctx, internal.calendar._syncUserCalendarWorkflow, {
+      userEmail: args.userEmail,
+    });
+  },
+});
+
 export const completeOAuthFlow = action({
   args: {
     code: v.string(),
@@ -60,68 +167,35 @@ export const completeOAuthFlow = action({
   },
   handler: async (ctx, args): Promise<{
     success: boolean;
-    userId: Id<"users">;
     email: string;
-    name: string;
   }> => {
-    const { code, state } = args;
+    // Start the OAuth completion workflow
+    const workflowId = await workflow.start(ctx, internal.oauth._completeOAuthWorkflow, {
+      code: args.code,
+      state: args.state,
+    });
 
-    // Get OAuth session first (we still need this for codeVerifier)
-    const session = await ctx.runQuery(api.oauth.getOAuthSession, { state });
+    const session = await ctx.runQuery(internal.oauth._getOAuthSession,
+      { state: args.state },
+    );
+
     if (!session) {
       throw new Error("Invalid OAuth state");
     }
 
-    // Exchange code for tokens using helper
-    const siteUrl = process.env.SITE_URL;
-    if (!siteUrl) {
-      throw new Error("SITE_URL environment variable not configured");
-    }
-
-    const tokens = await exchangeCodeForTokens(
-      code,
-      session.codeVerifier,
-      `${siteUrl}/api/oauth/callback`
-    );
-
-    // Get user info from Google using helper
-    const userInfo = await fetchGoogleUserInfo(tokens.access_token);
-
-    // Complete OAuth transaction using consolidated operation
-    const result: {
-      userId: Id<"users">;
-      email: string;
-      name: string;
-      codeVerifier: string;
-    } = await ctx.runMutation(internal.oauth._completeOAuthTransaction, {
-      state,
-      tokens,
-      userInfo,
-    });
-
-    // Trigger calendar refresh using helper function
-    await refreshUserCalendarHelper(ctx, userInfo.email);
-
+    // For now, return a simple success message with the workflow ID
+    // In a real app, you might want to poll the workflow status or use onComplete
     return {
       success: true,
-      userId: result.userId,
-      email: result.email,
-      name: result.name,
+      email: session.userEmail,
     };
   },
 });
 
-export const refreshAccessToken = action({
-  args: {
-    userId: v.id("users"),
-  },
-  handler: async (ctx, args): Promise<{
-    accessToken: string;
-    expiresAt: number;
-  }> => {
-    const { userId } = args;
+export async function refreshAccessToken(ctx: ActionCtx, args: { userId: Id<"users"> }) {
+  const { userId } = args;
 
-    const user = await ctx.runQuery(api.oauth.getUserTokens, { userId });
+    const user = await ctx.runQuery(internal.oauth._getUserTokens, { userId });
     if (!user?.googleRefreshToken) {
       throw new Error("No refresh token available");
     }
@@ -140,13 +214,12 @@ export const refreshAccessToken = action({
       expiresIn: tokens.expires_in,
     });
 
-    return result;
-  },
-});
+  return result;
+}
 
 
 // Query functions
-export const getOAuthSession = query({
+export const _getOAuthSession = internalQuery({
   args: {
     state: v.string(),
   },
@@ -158,7 +231,7 @@ export const getOAuthSession = query({
   },
 });
 
-export const getUserTokens = query({
+export const _getUserTokens = internalQuery({
   args: {
     userId: v.id("users"),
   },
@@ -167,20 +240,19 @@ export const getUserTokens = query({
   },
 });
 
-export const getUserByEmail = query({
-  args: {
-    email: v.string(),
-  },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", args.email))
-      .first();
-  },
-});
+export const _getUserTokensByEmail = internalQuery({
+    args: {
+      email: v.string(),
+    },
+    handler: async (ctx, args) => {
+      return await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", args.email)).first();
+    },
+  });
+
+
 
 // ================================
-// CONSOLIDATED INTERNAL OPERATIONS 
+// CONSOLIDATED INTERNAL OPERATIONS
 // ================================
 
 /**
@@ -230,7 +302,7 @@ export const _completeOAuthTransaction = internalMutation({
       });
       userId = existingUser._id;
     } else {
-      // Create new user  
+      // Create new user
       if (!args.tokens.refresh_token) {
         throw new Error("Refresh token is required for new users");
       }
@@ -256,7 +328,7 @@ export const _completeOAuthTransaction = internalMutation({
 });
 
 /**
- * Consolidated OAuth initiation 
+ * Consolidated OAuth initiation
  * Creates session and returns all needed data in one operation
  */
 export const _initiateOAuthSession = internalMutation({
@@ -270,6 +342,7 @@ export const _initiateOAuthSession = internalMutation({
       state: args.state,
       codeVerifier: args.codeVerifier,
       createdAt: Date.now(),
+      userEmail: args.userEmail,
     });
 
     return {

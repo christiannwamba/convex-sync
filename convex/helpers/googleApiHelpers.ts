@@ -97,7 +97,7 @@ export async function exchangeCodeForTokens(
 ): Promise<GoogleTokenResponse> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  
+
   if (!clientId || !clientSecret) {
     throw new Error("Google OAuth credentials not configured");
   }
@@ -160,7 +160,7 @@ export async function fetchGoogleUserInfo(accessToken: string): Promise<GoogleUs
 export async function refreshGoogleAccessToken(refreshToken: string): Promise<GoogleTokenResponse> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  
+
   if (!clientId || !clientSecret) {
     throw new Error("Google OAuth credentials not configured");
   }
@@ -221,30 +221,33 @@ export async function fetchGoogleCalendarEvents(
   } = {}
 ): Promise<GoogleCalendarEvent[]> {
   const { maxResults = 50, timeMin = new Date().toISOString() } = options;
-  
+
   const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
   url.searchParams.set('timeMin', timeMin);
   url.searchParams.set('maxResults', maxResults.toString());
   url.searchParams.set('singleEvents', 'true');
   url.searchParams.set('orderBy', 'startTime');
 
-  const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  try {
+    const response = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to fetch calendar events: ${error}`);
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Failed to fetch calendar events: ${error}`);
+      }
+
+      const data = await response.json() as { items?: RawGoogleCalendarEvent[] };
+      const rawEvents = data.items || [];
+      return rawEvents.map(cleanCalendarEvent);
+  } catch (error) {
+    console.error('Error fetching calendar events:', error);
+    throw error;
   }
-
-  const data = await response.json() as { items?: RawGoogleCalendarEvent[] };
-  const rawEvents = data.items || [];
-  
-  // Clean and return only the fields we care about
-  return rawEvents.map(cleanCalendarEvent);
 }
 
 /**

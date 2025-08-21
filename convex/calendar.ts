@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalMutation, query, ActionCtx, QueryCtx } from "./_generated/server";
+import { action, internalMutation, query, ActionCtx, QueryCtx, internalAction, mutation } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id, Doc } from "./_generated/dataModel";
 import { isTokenExpired } from "./helpers/tokenHelpers";
@@ -8,71 +8,95 @@ import {
   refreshGoogleAccessToken,
   type GoogleCalendarEvent
 } from "./helpers/googleApiHelpers";
+import { vWorkflowId, WorkflowManager } from "@convex-dev/workflow";
+import { components } from "./_generated/api";
+import { refreshAccessToken } from "./oauth";
 
-// Utility function to get user tokens and refresh if needed
-async function getUserWithFreshTokens(
-  ctx: ActionCtx,
-  userId: Id<"users">
-): Promise<{ accessToken: string; user: Doc<"users"> }> {
-  const user = await ctx.runQuery(api.oauth.getUserTokens, { userId });
+export const workflow = new WorkflowManager(components.workflow);
 
-  if (!user?.googleAccessToken) {
-    throw new Error("User not authenticated with Google");
-  }
+// Calendar sync workflow
+export const _syncUserCalendarWorkflow = workflow.define({
+  args: { userEmail: v.string() },
+  handler: async (step, args): Promise<{
+    success: boolean;
+    message: string;
+    eventsCount: number;
+  }> => {
+    // Step 1: Get user by email with retry
+    const user = await step.runQuery(internal.oauth._getUserTokensByEmail,
+      { email: args.userEmail },
+    );
 
-  // Check if token is expired using helper
-  const needsRefresh = user.tokenExpiresAt && isTokenExpired(user.tokenExpiresAt, 5);
+    if (!user) {
+      throw new Error("User not found");
+    }
 
-  if (needsRefresh) {
-    console.log("Token expired, refreshing...");
-    const refreshResult = await ctx.runAction(api.oauth.refreshAccessToken, { userId });
-    return { accessToken: refreshResult.accessToken, user };
-  }
+    // Step 2: Get user with fresh tokens with retry
+    const { accessToken } = await step.runAction(internal.calendar._getUserWithFreshTokens,
+      { userId: user._id },
+      { retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 } }
+    );
 
-  return { accessToken: user.googleAccessToken, user };
-}
+    // Step 3: Fetch events from Google with retry
+    const events = await step.runAction(internal.calendar._fetchGoogleCalendarEvents,
+      {
+        accessToken,
+        maxResults: 100,
+      },
+      { retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 } }
+    );
 
-// Helper function for calendar refresh logic (can be reused)
-export async function refreshUserCalendarHelper(
-  ctx: ActionCtx,
-  userEmail: string
-): Promise<{
-  success: boolean;
-  message: string;
-  eventsCount: number;
-}> {
-  // Get user by email
-  const user: {_id: Id<"users">} | null = await ctx.runQuery(api.oauth.getUserByEmail, { email: userEmail });
-  if (!user) {
-    throw new Error("User not found");
-  }
 
-  try {
-    // Get user with fresh tokens
-    const { accessToken } = await getUserWithFreshTokens(ctx, user._id);
-
-    // Fetch events from Google using helper
-    const events = await fetchEventsFromGoogle(accessToken, {
-      maxResults: 100,
-      timeMin: new Date().toISOString(),
-    });
-
-    // Use consolidated operation that clears and refreshes all events
-    const result = await ctx.runMutation(internal.calendar._batchRefreshUserCalendar, {
-      userEmail,
-      events,
-    });
+    // Step 4: Store events in database with retry
+    const result = await step.runMutation(internal.calendar._batchRefreshUserCalendar,
+      { userEmail: args.userEmail, events },
+    );
 
     return result;
-  } catch (error) {
-    console.error('Calendar refresh failed:', error);
-    return {
-      success: false,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      eventsCount: 0,
-    };
-  }
-}
+  },
+});
+
+// Internal action to get user tokens and refresh if needed
+export const _getUserWithFreshTokens = internalAction({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args): Promise<{ accessToken: string; user: Doc<"users"> }> => {
+    const user = await ctx.runQuery(internal.oauth._getUserTokens, { userId: args.userId });
+
+    if (!user?.googleAccessToken) {
+      throw new Error("User not authenticated with Google");
+    }
+
+    // Check if token is expired using helper
+    const needsRefresh = user.tokenExpiresAt && isTokenExpired(user.tokenExpiresAt, 5);
+
+    if (needsRefresh) {
+      console.log("Token expired, refreshing...");
+      const refreshResult = await refreshAccessToken(ctx, { userId: args.userId });
+      return { accessToken: refreshResult.accessToken, user };
+    }
+
+    return { accessToken: user.googleAccessToken, user };
+  },
+});
+
+// Internal action to fetch Google Calendar events
+export const _fetchGoogleCalendarEvents = internalAction({
+  args: {
+    accessToken: v.string(),
+    maxResults: v.number(),
+  },
+  handler: async (ctx, args): Promise<GoogleCalendarEvent[]> => {
+    const timeMin = new Date().toISOString();
+    console.log("fetching events");
+    return await fetchEventsFromGoogle(args.accessToken, {
+      maxResults: args.maxResults,
+      timeMin,
+    });
+  },
+});
+
+// Helper function for calendar refresh logic (can be reused)
+
 
 export const refreshUserCalendar = action({
   args: {
@@ -83,7 +107,18 @@ export const refreshUserCalendar = action({
     message: string;
     eventsCount: number;
 }> => {
-    return await refreshUserCalendarHelper(ctx, args.userEmail);
+    // Start the calendar sync workflow
+    const workflowId = await workflow.start(ctx, internal.calendar._syncUserCalendarWorkflow, {
+      userEmail: args.userEmail,
+    });
+
+    // For now, return a simple success message with the workflow ID
+    // In a real app, you might want to poll the workflow status
+    return {
+      success: true,
+      message: `Calendar sync workflow started with ID: ${workflowId}`,
+      eventsCount: 0, // Will be updated when workflow completes
+    };
   },
 });
 
@@ -227,108 +262,6 @@ export const _batchRefreshUserCalendar = internalMutation({
       eventsCount: args.events.length,
       userId: user._id,
       storedEventIds,
-    };
-  },
-});
-
-/**
- * Consolidated event storage operation
- * Handles batch event insertion/updating with upsert logic
- */
-export const _batchStoreEvents = internalMutation({
-  args: {
-    userId: v.id("users"),
-    events: v.array(
-      v.object({
-        // Only validate the fields we actually need/use
-        id: v.string(),
-        summary: v.string(),
-        description: v.optional(v.string()),
-        start: v.object({
-          dateTime: v.optional(v.string()),
-          date: v.optional(v.string()),
-          timeZone: v.optional(v.string()),
-        }),
-        end: v.object({
-          dateTime: v.optional(v.string()),
-          date: v.optional(v.string()),
-          timeZone: v.optional(v.string()),
-        }),
-        location: v.optional(v.string()),
-        status: v.string(),
-      })
-    ),
-  },
-  handler: async (ctx, args) => {
-    const storedEventIds: Id<"calendarEvents">[] = [];
-    const lastSyncedAt = Date.now();
-
-    for (const event of args.events) {
-      // Check if event already exists
-      const existingEvent = await ctx.db
-        .query("calendarEvents")
-        .withIndex("by_google_event_id", (q) => q.eq("googleEventId", event.id))
-        .first();
-
-      if (existingEvent) {
-        // Update existing event
-        await ctx.db.patch(existingEvent._id, {
-          summary: event.summary || 'Untitled Event',
-          description: event.description,
-          start: event.start,
-          end: event.end,
-          location: event.location,
-          status: event.status,
-          lastSyncedAt,
-        });
-        storedEventIds.push(existingEvent._id);
-      } else {
-        // Create new event
-        const eventId = await ctx.db.insert("calendarEvents", {
-          userId: args.userId,
-          googleEventId: event.id,
-          summary: event.summary || 'Untitled Event',
-          description: event.description,
-          start: event.start,
-          end: event.end,
-          location: event.location,
-          status: event.status,
-          lastSyncedAt,
-        });
-        storedEventIds.push(eventId);
-      }
-    }
-
-    return {
-      success: true,
-      eventsCount: args.events.length,
-      storedEventIds,
-    };
-  },
-});
-
-/**
- * Get user with token validation in single query
- */
-export const _getUserWithValidTokens = query({
-  args: {
-    userId: v.id("users"),
-  },
-  handler: async (ctx, args) => {
-    const user = await ctx.db.get(args.userId);
-
-    if (!user?.googleAccessToken) {
-      return { user: null, needsTokenRefresh: false, isValid: false };
-    }
-
-    // Check if token is expired (with 5 minute buffer)
-    const now = Date.now();
-    const isTokenExpired = user.tokenExpiresAt && (user.tokenExpiresAt - now) < 5 * 60 * 1000;
-
-    return {
-      user,
-      needsTokenRefresh: isTokenExpired || false,
-      isValid: true,
     };
   },
 });

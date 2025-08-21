@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@convex-dev/workflow':
+        specifier: ^0.2.6
+        version: 0.2.6(@convex-dev/workpool@0.2.18(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0)))(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0))
       convex:
         specifier: ^1.25.4
         version: 1.25.4(react@19.1.0)
@@ -104,6 +107,19 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
+
+  '@convex-dev/workflow@0.2.6':
+    resolution: {integrity: sha512-jXaRqBHiRKHCbm8kll0+PxlRtHFkmXCVVbKBhuVYLP4/O5Tlxb2teXDKx+pv3hsmcps0uySm5QKSmsp51N1hTw==}
+    peerDependencies:
+      '@convex-dev/workpool': ^0.2.17
+      convex: '>=1.25.0 <1.35.0'
+      convex-helpers: ^0.1.99
+
+  '@convex-dev/workpool@0.2.18':
+    resolution: {integrity: sha512-tfRfBCukaRiybxwy4/W3rLWpIRhPivFH9tC5++d0XE1sV627vw2mAwOM9SnpY1k+BWVoNrHrHrxBheklSbuAag==}
+    peerDependencies:
+      convex: '>=1.25.0 <1.35.0'
+      convex-helpers: ^0.1.94
 
   '@emnapi/runtime@1.4.5':
     resolution: {integrity: sha512-++LApOtY0pEEz1zrd9vy1/zXVaVJJ/EbAF3u0fXIzPJEDtnITsBGbbK0EkM72amhl/R5b+5xx0Y/QhcVOpuulg==}
@@ -561,6 +577,9 @@ packages:
     resolution: {integrity: sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg==}
     engines: {node: '>=8'}
 
+  async-channel@0.2.0:
+    resolution: {integrity: sha512-BJyjI/sfKlyijaBt2hbOSxT28xGNtLR0QLzAKO1Hlnv5BULY7sAoYoTPW3lfr1ZIC7y+FxabxO9T8GXpyoofGg==}
+
   caniuse-lite@1.0.30001736:
     resolution: {integrity: sha512-ImpN5gLEY8gWeqfLUyEF4b7mYWcYoR2Si1VhnrbM4JizRFmfGaAQ12PhNykq6nvI4XvKLrsp8Xde74D5phJOSw==}
 
@@ -597,6 +616,28 @@ packages:
     resolution: {integrity: sha512-IsB/fiXTupmagMW4MNp2lx2cdSN2FfZq78vF90LBB+zZHArbIQZjQtzXCiXnvTxCZSvXanTqFLWBjw2UkLx1SQ==}
     engines: {node: '>=18'}
     hasBin: true
+
+  convex-helpers@0.1.104:
+    resolution: {integrity: sha512-7CYvx7T3K6n+McDTK4ZQaQNNGBzq5aWezpjzsKbOxPXx7oNcTP9wrpef3JxeXWFzkByJv5hRCjseh9B7eNJ7Ig==}
+    hasBin: true
+    peerDependencies:
+      '@standard-schema/spec': ^1.0.0
+      convex: ^1.24.0
+      hono: ^4.0.5
+      react: ^17.0.2 || ^18.0.0 || ^19.0.0
+      typescript: ^5.5
+      zod: ^3.22.4 || ^4.0.15
+    peerDependenciesMeta:
+      '@standard-schema/spec':
+        optional: true
+      hono:
+        optional: true
+      react:
+        optional: true
+      typescript:
+        optional: true
+      zod:
+        optional: true
 
   convex@1.25.4:
     resolution: {integrity: sha512-LiGZZTmbe5iHWwDOYfSA00w+uDM8kgLC0ohFJW0VgQlKcs8famHCE6yuplk4wwXyj9Lhb1+yMRfrAD2ZEquqHg==}
@@ -941,6 +982,18 @@ snapshots:
   '@biomejs/cli-win32-x64@2.2.0':
     optional: true
 
+  '@convex-dev/workflow@0.2.6(@convex-dev/workpool@0.2.18(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0)))(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0))':
+    dependencies:
+      '@convex-dev/workpool': 0.2.18(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0))
+      async-channel: 0.2.0
+      convex: 1.25.4(react@19.1.0)
+      convex-helpers: 0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2)
+
+  '@convex-dev/workpool@0.2.18(convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2))(convex@1.25.4(react@19.1.0))':
+    dependencies:
+      convex: 1.25.4(react@19.1.0)
+      convex-helpers: 0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2)
+
   '@emnapi/runtime@1.4.5':
     dependencies:
       tslib: 2.8.1
@@ -1250,6 +1303,8 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
+  async-channel@0.2.0: {}
+
   caniuse-lite@1.0.30001736: {}
 
   chalk@4.1.2:
@@ -1294,6 +1349,13 @@ snapshots:
       supports-color: 8.1.1
       tree-kill: 1.2.2
       yargs: 17.7.2
+
+  convex-helpers@0.1.104(convex@1.25.4(react@19.1.0))(react@19.1.0)(typescript@5.9.2):
+    dependencies:
+      convex: 1.25.4(react@19.1.0)
+    optionalDependencies:
+      react: 19.1.0
+      typescript: 5.9.2
 
   convex@1.25.4(react@19.1.0):
     dependencies:

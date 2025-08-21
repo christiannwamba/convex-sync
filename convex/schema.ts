@@ -9,7 +9,7 @@ export default defineSchema({
     googleRefreshToken: v.optional(v.string()),
     tokenExpiresAt: v.optional(v.number()),
   }).index("by_email", ["email"]),
-  
+
   calendarEvents: defineTable({
     userId: v.id("users"),
     googleEventId: v.string(),
@@ -30,11 +30,12 @@ export default defineSchema({
     lastSyncedAt: v.number(),
   }).index("by_user", ["userId"])
     .index("by_google_event_id", ["googleEventId"]),
-  
+
   oauthSessions: defineTable({
     state: v.string(),
     codeVerifier: v.string(),
     userId: v.optional(v.id("users")),
     createdAt: v.number(),
+    userEmail: v.string(),
   }).index("by_state", ["state"]),
 });

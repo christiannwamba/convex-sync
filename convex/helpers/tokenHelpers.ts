@@ -32,7 +32,7 @@ export async function generatePKCEParams(): Promise<{
   const state = generateRandomString(32);
   const codeVerifier = generateRandomString(43); // 43 chars for base64url-safe
   const codeChallenge = await generateCodeChallenge(codeVerifier);
-  
+
   return { state, codeVerifier, codeChallenge };
 }
 
@@ -56,7 +56,7 @@ export function buildGoogleOAuthUrl(
   googleOAuthUrl.searchParams.set('code_challenge_method', 'S256');
   googleOAuthUrl.searchParams.set('access_type', 'offline');
   googleOAuthUrl.searchParams.set('prompt', 'consent');
-  
+
   return googleOAuthUrl.toString();
 }
 
@@ -77,30 +77,4 @@ export function isTokenExpired(
  */
 export function calculateTokenExpiration(expiresInSeconds: number): number {
   return Date.now() + (expiresInSeconds * 1000);
-}
-
-/**
- * Validate OAuth state parameter
- */
-export function validateOAuthState(
-  providedState: string,
-  expectedState: string
-): boolean {
-  return providedState === expectedState;
-}
-
-/**
- * Extract domain from email address
- */
-export function extractEmailDomain(email: string): string {
-  const atIndex = email.lastIndexOf('@');
-  return atIndex >= 0 ? email.substring(atIndex + 1) : '';
-}
-
-/**
- * Validate email format
- */
-export function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
 }

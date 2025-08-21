@@ -50,7 +50,7 @@ export default function Dashboard() {
       const result = await syncCalendar({ userEmail: email });
 
       if (result.success) {
-        setSyncStatus(`Successfully synced ${result.eventsCount} events!`);
+        setSyncStatus(`Successfully initiated sync!`);
       } else {
         setSyncStatus(`Sync failed: ${result.message}`);
       }
