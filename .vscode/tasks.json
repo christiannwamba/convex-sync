@@ -1,0 +1,30 @@
+// .vscode/tasks.json
+{
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Dev Backend",
+        "type": "npm",
+        "script": "dev:backend",
+        "presentation": {
+          "group": "dev",
+          "panel": "dedicated"
+        }
+      },
+      {
+        "label": "Dev Frontend",
+        "type": "npm",
+        "script": "dev:frontend",
+        "presentation": {
+          "group": "dev",
+          "panel": "dedicated"
+        }
+      }
+    ],
+    "compounds": [
+      {
+        "name": "Dev All",
+        "dependsOn": ["Dev Backend", "Dev Frontend"]
+      }
+    ]
+  }
