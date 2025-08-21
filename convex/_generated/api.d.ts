@@ -14,6 +14,8 @@ import type {
   FunctionReference,
 } from "convex/server";
 import type * as calendar from "../calendar.js";
+import type * as helpers_googleApiHelpers from "../helpers/googleApiHelpers.js";
+import type * as helpers_tokenHelpers from "../helpers/tokenHelpers.js";
 import type * as oauth from "../oauth.js";
 
 /**
@@ -26,6 +28,8 @@ import type * as oauth from "../oauth.js";
  */
 declare const fullApi: ApiFromModules<{
   calendar: typeof calendar;
+  "helpers/googleApiHelpers": typeof helpers_googleApiHelpers;
+  "helpers/tokenHelpers": typeof helpers_tokenHelpers;
   oauth: typeof oauth;
 }>;
 export declare const api: FilterApi<

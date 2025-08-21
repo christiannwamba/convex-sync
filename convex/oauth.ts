@@ -2,22 +2,17 @@ import { v } from "convex/values";
 import { action, internalMutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
-
-// Generate cryptographically secure random string for PKCE
-function generateRandomString(length: number): string {
-  const array = new Uint8Array(length);
-  crypto.getRandomValues(array);
-  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-// Generate code challenge for PKCE
-async function generateCodeChallenge(codeVerifier: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(codeVerifier);
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  const base64String = btoa(String.fromCharCode(...new Uint8Array(digest)));
-  return base64String.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
+import { 
+  generatePKCEParams, 
+  buildGoogleOAuthUrl,
+  isTokenExpired 
+} from "./helpers/tokenHelpers";
+import {
+  exchangeCodeForTokens,
+  fetchGoogleUserInfo,
+  refreshGoogleAccessToken
+} from "./helpers/googleApiHelpers";
+import { refreshUserCalendarHelper } from "./calendar";
 
 export const initiateGoogleOAuth = action({
   args: {
@@ -26,32 +21,33 @@ export const initiateGoogleOAuth = action({
   handler: async (ctx, args) => {
     const { userEmail } = args;
 
-    // Generate PKCE parameters
-    const state = generateRandomString(32);
-    const codeVerifier = generateRandomString(43); // 43 chars for base64url-safe
-    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    // Generate PKCE parameters using helper
+    const { state, codeVerifier, codeChallenge } = await generatePKCEParams();
 
-    // Store OAuth session
-    await ctx.runMutation(internal.oauth.storeOAuthSession, {
+    // Store OAuth session using consolidated operation
+    await ctx.runMutation(internal.oauth._initiateOAuthSession, {
       state,
       codeVerifier,
       userEmail,
     });
 
-    // Build OAuth URL
-    const googleOAuthUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-    googleOAuthUrl.searchParams.set('client_id', process.env.GOOGLE_CLIENT_ID!);
-    googleOAuthUrl.searchParams.set('redirect_uri', `${process.env.SITE_URL}/api/oauth/callback`);
-    googleOAuthUrl.searchParams.set('response_type', 'code');
-    googleOAuthUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/calendar.readonly openid email profile');
-    googleOAuthUrl.searchParams.set('state', state);
-    googleOAuthUrl.searchParams.set('code_challenge', codeChallenge);
-    googleOAuthUrl.searchParams.set('code_challenge_method', 'S256');
-    googleOAuthUrl.searchParams.set('access_type', 'offline');
-    googleOAuthUrl.searchParams.set('prompt', 'consent');
+    // Build OAuth URL using helper
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const siteUrl = process.env.SITE_URL;
+    
+    if (!clientId || !siteUrl) {
+      throw new Error("OAuth configuration missing: GOOGLE_CLIENT_ID or SITE_URL not set");
+    }
+
+    const oauthUrl = buildGoogleOAuthUrl(
+      clientId,
+      `${siteUrl}/api/oauth/callback`,
+      state,
+      codeChallenge
+    );
 
     return {
-      oauthUrl: googleOAuthUrl.toString(),
+      oauthUrl,
       state,
     };
   },
@@ -62,76 +58,55 @@ export const completeOAuthFlow = action({
     code: v.string(),
     state: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    success: boolean;
+    userId: Id<"users">;
+    email: string;
+    name: string;
+  }> => {
     const { code, state } = args;
 
-    // Get OAuth session
+    // Get OAuth session first (we still need this for codeVerifier)
     const session = await ctx.runQuery(api.oauth.getOAuthSession, { state });
     if (!session) {
       throw new Error("Invalid OAuth state");
     }
 
-    // Exchange code for tokens
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: `${process.env.SITE_URL}/api/oauth/callback`,
-        code_verifier: session.codeVerifier,
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      const error = await tokenResponse.text();
-      throw new Error(`Token exchange failed: ${error}`);
+    // Exchange code for tokens using helper
+    const siteUrl = process.env.SITE_URL;
+    if (!siteUrl) {
+      throw new Error("SITE_URL environment variable not configured");
     }
 
-    const tokens = await tokenResponse.json() as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-    };
+    const tokens = await exchangeCodeForTokens(
+      code,
+      session.codeVerifier,
+      `${siteUrl}/api/oauth/callback`
+    );
 
-    // Get user info from Google
-    const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: {
-        Authorization: `Bearer ${tokens.access_token}`,
-      },
-    });
+    // Get user info from Google using helper
+    const userInfo = await fetchGoogleUserInfo(tokens.access_token);
 
-    if (!userInfoResponse.ok) {
-      throw new Error('Failed to fetch user info');
-    }
-
-    const userInfo = await userInfoResponse.json() as {
+    // Complete OAuth transaction using consolidated operation
+    const result: {
+      userId: Id<"users">;
       email: string;
       name: string;
-    };
+      codeVerifier: string;
+    } = await ctx.runMutation(internal.oauth._completeOAuthTransaction, {
+      state,
+      tokens,
+      userInfo,
+    });
 
-    // Store user and tokens
-    const userId = await ctx.runMutation(internal.oauth.storeUserWithTokens, {
-      email: userInfo.email,
-      name: userInfo.name,
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiresIn: tokens.expires_in,
-    }) as Id<"users">;
-
-    // Clean up OAuth session
-    await ctx.runMutation(internal.oauth.cleanupOAuthSession, { state });
-    await ctx.runAction(api.calendar.refreshUserCalendar, { userEmail: userInfo.email });
+    // Trigger calendar refresh using helper function
+    await refreshUserCalendarHelper(ctx, userInfo.email);
 
     return {
       success: true,
-      userId,
-      email: userInfo.email,
-      name: userInfo.name,
+      userId: result.userId,
+      email: result.email,
+      name: result.name,
     };
   },
 });
@@ -140,7 +115,10 @@ export const refreshAccessToken = action({
   args: {
     userId: v.id("users"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    accessToken: string;
+    expiresAt: number;
+  }> => {
     const { userId } = args;
 
     const user = await ctx.runQuery(api.oauth.getUserTokens, { userId });
@@ -148,130 +126,24 @@ export const refreshAccessToken = action({
       throw new Error("No refresh token available");
     }
 
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        refresh_token: user.googleRefreshToken,
-        grant_type: 'refresh_token',
-      }),
-    });
+    // Refresh tokens using helper
+    const tokens = await refreshGoogleAccessToken(user.googleRefreshToken);
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Token refresh failed: ${error}`);
-    }
-
-    const tokens = await response.json() as {
-      access_token: string;
-      refresh_token?: string;
-      expires_in: number;
-    };
-
-    // Update tokens
-    await ctx.runMutation(internal.oauth.updateUserTokens, {
+    // Update tokens using consolidated operation
+    const result: {
+      accessToken: string;
+      expiresAt: number;
+    } = await ctx.runMutation(internal.oauth._refreshUserTokens, {
       userId,
       accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token || user.googleRefreshToken, // Keep existing refresh token if not provided
+      refreshToken: tokens.refresh_token,
       expiresIn: tokens.expires_in,
     });
 
-    return {
-      accessToken: tokens.access_token,
-      expiresAt: Date.now() + (tokens.expires_in * 1000),
-    };
+    return result;
   },
 });
 
-// Internal mutations
-export const storeOAuthSession = internalMutation({
-  args: {
-    state: v.string(),
-    codeVerifier: v.string(),
-    userEmail: v.string(),
-  },
-  handler: async (ctx, args) => {
-    return await ctx.db.insert("oauthSessions", {
-      state: args.state,
-      codeVerifier: args.codeVerifier,
-      createdAt: Date.now(),
-    });
-  },
-});
-
-export const storeUserWithTokens = internalMutation({
-  args: {
-    email: v.string(),
-    name: v.string(),
-    accessToken: v.string(),
-    refreshToken: v.string(),
-    expiresIn: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const existingUser = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", args.email))
-      .first();
-
-    const expiresAt = Date.now() + (args.expiresIn * 1000);
-
-    if (existingUser) {
-      await ctx.db.patch(existingUser._id, {
-        name: args.name,
-        googleAccessToken: args.accessToken,
-        googleRefreshToken: args.refreshToken,
-        tokenExpiresAt: expiresAt,
-      });
-      return existingUser._id;
-    } else {
-      return await ctx.db.insert("users", {
-        email: args.email,
-        name: args.name,
-        googleAccessToken: args.accessToken,
-        googleRefreshToken: args.refreshToken,
-        tokenExpiresAt: expiresAt,
-      });
-    }
-  },
-});
-
-export const updateUserTokens = internalMutation({
-  args: {
-    userId: v.id("users"),
-    accessToken: v.string(),
-    refreshToken: v.string(),
-    expiresIn: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const expiresAt = Date.now() + (args.expiresIn * 1000);
-
-    await ctx.db.patch(args.userId, {
-      googleAccessToken: args.accessToken,
-      googleRefreshToken: args.refreshToken,
-      tokenExpiresAt: expiresAt,
-    });
-  },
-});
-
-export const cleanupOAuthSession = internalMutation({
-  args: {
-    state: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const session = await ctx.db
-      .query("oauthSessions")
-      .withIndex("by_state", (q) => q.eq("state", args.state))
-      .first();
-
-    if (session) {
-      await ctx.db.delete(session._id);
-    }
-  },
-});
 
 // Query functions
 export const getOAuthSession = query({
@@ -304,5 +176,137 @@ export const getUserByEmail = query({
       .query("users")
       .withIndex("by_email", (q) => q.eq("email", args.email))
       .first();
+  },
+});
+
+// ================================
+// CONSOLIDATED INTERNAL OPERATIONS 
+// ================================
+
+/**
+ * Consolidated OAuth completion transaction
+ * Combines session validation, user storage, and cleanup in single transaction
+ */
+export const _completeOAuthTransaction = internalMutation({
+  args: {
+    state: v.string(),
+    tokens: v.object({
+      access_token: v.string(),
+      refresh_token: v.optional(v.string()),
+      expires_in: v.number(),
+    }),
+    userInfo: v.object({
+      email: v.string(),
+      name: v.string(),
+    }),
+  },
+  handler: async (ctx, args) => {
+    // Validate OAuth session
+    const session = await ctx.db
+      .query("oauthSessions")
+      .withIndex("by_state", (q) => q.eq("state", args.state))
+      .first();
+
+    if (!session) {
+      throw new Error("Invalid OAuth state");
+    }
+
+    // Check if user already exists
+    const existingUser = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.userInfo.email))
+      .first();
+
+    const expiresAt = Date.now() + (args.tokens.expires_in * 1000);
+    let userId: Id<"users">;
+
+    if (existingUser) {
+      // Update existing user
+      await ctx.db.patch(existingUser._id, {
+        name: args.userInfo.name,
+        googleAccessToken: args.tokens.access_token,
+        googleRefreshToken: args.tokens.refresh_token || existingUser.googleRefreshToken,
+        tokenExpiresAt: expiresAt,
+      });
+      userId = existingUser._id;
+    } else {
+      // Create new user  
+      if (!args.tokens.refresh_token) {
+        throw new Error("Refresh token is required for new users");
+      }
+      userId = await ctx.db.insert("users", {
+        email: args.userInfo.email,
+        name: args.userInfo.name,
+        googleAccessToken: args.tokens.access_token,
+        googleRefreshToken: args.tokens.refresh_token,
+        tokenExpiresAt: expiresAt,
+      });
+    }
+
+    // Clean up OAuth session
+    await ctx.db.delete(session._id);
+
+    return {
+      userId,
+      email: args.userInfo.email,
+      name: args.userInfo.name,
+      codeVerifier: session.codeVerifier,
+    };
+  },
+});
+
+/**
+ * Consolidated OAuth initiation 
+ * Creates session and returns all needed data in one operation
+ */
+export const _initiateOAuthSession = internalMutation({
+  args: {
+    state: v.string(),
+    codeVerifier: v.string(),
+    userEmail: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const sessionId = await ctx.db.insert("oauthSessions", {
+      state: args.state,
+      codeVerifier: args.codeVerifier,
+      createdAt: Date.now(),
+    });
+
+    return {
+      sessionId,
+      state: args.state,
+    };
+  },
+});
+
+/**
+ * Consolidated token refresh operation
+ * Updates user tokens in single transaction
+ */
+export const _refreshUserTokens = internalMutation({
+  args: {
+    userId: v.id("users"),
+    accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
+    expiresIn: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const expiresAt = Date.now() + (args.expiresIn * 1000);
+
+    await ctx.db.patch(args.userId, {
+      googleAccessToken: args.accessToken,
+      googleRefreshToken: args.refreshToken || user.googleRefreshToken,
+      tokenExpiresAt: expiresAt,
+    });
+
+    return {
+      accessToken: args.accessToken,
+      expiresAt,
+    };
   },
 });
