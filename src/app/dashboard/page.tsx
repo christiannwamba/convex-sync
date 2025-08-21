@@ -4,6 +4,12 @@ import { useQuery, useAction } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { CheckCircle2, XCircle, RefreshCw, LogOut, Home, Calendar, MapPin, Clock } from 'lucide-react';
 
 interface CalendarEvent {
   _id: string;
@@ -118,203 +124,233 @@ export default function Dashboard() {
 
   if (!email) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">No email provided</h1>
-          <a href="/" className="text-blue-600 hover:text-blue-800">← Back to home</a>
-        </div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Card className="text-center">
+          <CardHeader>
+            <CardTitle className="text-2xl">No email provided</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <a href="/">
+                <Home className="w-4 h-4" />
+                Back to home
+              </a>
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       <div className="max-w-6xl mx-auto px-4 py-8">
         <header className="mb-8">
           <div className="flex justify-between items-start">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Calendar Dashboard</h1>
-              <p className="text-gray-600 mt-1">Welcome, {email}</p>
+              <h1 className="text-3xl font-heading font-bold text-foreground">Calendar Dashboard</h1>
+              <p className="text-muted-foreground mt-1 font-base">Welcome, {email}</p>
             </div>
             <div className="flex items-center space-x-4">
-              <a
-                href="/"
-                className="text-blue-600 hover:text-blue-800 text-sm"
-              >
-                ← Back to home
-              </a>
+              <Button asChild variant="ghost">
+                <a href="/">
+                  <Home className="w-4 h-4" />
+                  Back to home
+                </a>
+              </Button>
               {authStatus?.isAuthenticated && (
-                <button
-                  onClick={() => setShowLogoutConfirm(true)}
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
-                >
-                  Logout & Delete Data
-                </button>
+                <Dialog open={showLogoutConfirm} onOpenChange={setShowLogoutConfirm}>
+                  <DialogTrigger asChild>
+                    <Button variant="destructive">
+                      <LogOut className="w-4 h-4" />
+                      Logout & Delete Data
+                    </Button>
+                  </DialogTrigger>
+                </Dialog>
               )}
             </div>
           </div>
         </header>
 
         {/* Auth Status */}
-        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <h2 className="text-xl font-semibold mb-4">Authentication Status</h2>
-          {authStatus ? (
-            <div className="space-y-2">
-              <div className="flex items-center space-x-2">
-                <span className={`inline-block w-3 h-3 rounded-full ${
-                  authStatus.isAuthenticated ? 'bg-green-500' : 'bg-red-500'
-                }`}></span>
-                <span className={`font-medium ${
-                  authStatus.isAuthenticated ? 'text-green-700' : 'text-red-700'
-                }`}>
-                  {authStatus.isAuthenticated ? 'Connected to Google Calendar' : 'Not connected'}
-                </span>
-              </div>
-              {authStatus.isAuthenticated && authStatus.user && (
-                <div className="text-sm text-gray-600 space-y-1">
-                  <p>User: {authStatus.user.name || authStatus.user.email}</p>
-                  {authStatus.user.tokenExpiresAt && (
-                    <p>Token expires: {new Date(authStatus.user.tokenExpiresAt).toLocaleString()}</p>
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-xl">Authentication Status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {authStatus ? (
+              <div className="space-y-4">
+                <div className="flex items-center space-x-3">
+                  {authStatus.isAuthenticated ? (
+                    <CheckCircle2 className="w-5 h-5 text-green-400" />
+                  ) : (
+                    <XCircle className="w-5 h-5 text-red-400" />
                   )}
+                  <Badge variant={authStatus.isAuthenticated ? "default" : "secondary"}>
+                    {authStatus.isAuthenticated ? 'Connected to Google Calendar' : 'Not connected'}
+                  </Badge>
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className="animate-pulse">
-              <div className="h-4 bg-gray-200 rounded w-1/4"></div>
-            </div>
-          )}
-        </div>
+                {authStatus.isAuthenticated && authStatus.user && (
+                  <div className="text-sm text-muted-foreground space-y-1 font-base">
+                    <p>User: {authStatus.user.name || authStatus.user.email}</p>
+                    {authStatus.user.tokenExpiresAt && (
+                      <p>Token expires: {new Date(authStatus.user.tokenExpiresAt).toLocaleString()}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="animate-pulse">
+                <div className="h-4 bg-muted rounded w-1/4"></div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Sync Controls */}
         {authStatus?.isAuthenticated && (
-          <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-            <div className="flex justify-between items-center">
-              <div>
-                <h2 className="text-xl font-semibold">Calendar Sync</h2>
-                <p className="text-gray-600 text-sm mt-1">Sync your Google Calendar events</p>
+          <Card className="mb-6">
+            <CardHeader>
+              <div className="flex justify-between items-center">
+                <div>
+                  <CardTitle className="text-xl">Calendar Sync</CardTitle>
+                  <CardDescription>Sync your Google Calendar events</CardDescription>
+                </div>
+                <Button
+                  onClick={handleSync}
+                  disabled={isLoading}
+                  variant="default"
+                >
+                  {isLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      Sync Now
+                    </>
+                  )}
+                </Button>
               </div>
-              <button
-                onClick={handleSync}
-                disabled={isLoading}
-                className={`px-4 py-2 rounded-md font-medium transition-colors ${
-                  isLoading
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-blue-600 text-white hover:bg-blue-700'
-                }`}
-              >
-                {isLoading ? 'Syncing...' : 'Sync Now'}
-              </button>
-            </div>
+            </CardHeader>
             {syncStatus && (
-              <div className={`mt-4 p-3 rounded-md text-sm ${
-                syncStatus.includes('Successfully')
-                  ? 'bg-green-50 text-green-800 border border-green-200'
-                  : syncStatus.includes('Error') || syncStatus.includes('failed')
-                  ? 'bg-red-50 text-red-800 border border-red-200'
-                  : 'bg-blue-50 text-blue-800 border border-blue-200'
-              }`}>
-                {syncStatus}
-              </div>
+              <CardContent>
+                <Alert>
+                  <AlertDescription className="text-sm">
+                    {syncStatus}
+                  </AlertDescription>
+                </Alert>
+              </CardContent>
             )}
-          </div>
+          </Card>
         )}
 
         {/* Calendar Events */}
-        <div className="bg-white rounded-lg shadow-sm">
-          <div className="p-6 border-b border-gray-200">
-            <h2 className="text-xl font-semibold">Your Calendar Events</h2>
-            <p className="text-gray-600 text-sm mt-1">Recent events from your Google Calendar</p>
-          </div>
-
-          <div className="p-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">Your Calendar Events</CardTitle>
+            <CardDescription>Recent events from your Google Calendar</CardDescription>
+          </CardHeader>
+          <CardContent>
             {calendarEvents === undefined ? (
               <div className="space-y-4">
                 {[...Array(3)].map((_, i) => (
                   <div key={i} className="animate-pulse">
-                    <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                    <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                    <div className="h-4 bg-muted rounded w-3/4 mb-2"></div>
+                    <div className="h-3 bg-muted rounded w-1/2"></div>
                   </div>
                 ))}
               </div>
             ) : calendarEvents && calendarEvents.length > 0 ? (
               <div className="space-y-4">
                 {calendarEvents.map((event) => (
-                  <div key={event._id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-lg text-gray-900">{event.summary}</h3>
-                        <p className="text-sm text-gray-600 mt-1">{formatEventTime(event)}</p>
-                        {event.location && (
-                          <p className="text-sm text-gray-500 mt-1">📍 {event.location}</p>
-                        )}
-                        {event.description && (
-                          <p className="text-sm text-gray-700 mt-2 line-clamp-2">{event.description}</p>
-                        )}
+                  <Card key={event._id} className="border-border hover:shadow-shadow-sm transition-all">
+                    <CardContent className="p-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <h3 className="font-heading font-semibold text-lg text-foreground">{event.summary}</h3>
+                          <div className="flex items-center text-sm text-muted-foreground mt-1">
+                            <Clock className="w-4 h-4 mr-1" />
+                            {formatEventTime(event)}
+                          </div>
+                          {event.location && (
+                            <div className="flex items-center text-sm text-muted-foreground mt-1">
+                              <MapPin className="w-4 h-4 mr-1" />
+                              {event.location}
+                            </div>
+                          )}
+                          {event.description && (
+                            <p className="text-sm text-foreground mt-2 line-clamp-2">{event.description}</p>
+                          )}
+                        </div>
+                        <div className="text-right text-xs text-muted-foreground ml-4 space-y-1">
+                          <Badge variant="secondary">{event.status}</Badge>
+                          <p>Synced: {new Date(event.lastSyncedAt).toLocaleDateString()}</p>
+                        </div>
                       </div>
-                      <div className="text-right text-xs text-gray-400 ml-4">
-                        <p>Status: {event.status}</p>
-                        <p>Synced: {new Date(event.lastSyncedAt).toLocaleDateString()}</p>
-                      </div>
-                    </div>
-                  </div>
+                    </CardContent>
+                  </Card>
                 ))}
               </div>
             ) : (
               <div className="text-center py-12">
-                <div className="text-gray-400 mb-4">
-                  <svg className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
+                <div className="text-muted-foreground mb-4">
+                  <Calendar className="mx-auto h-12 w-12" />
                 </div>
-                <h3 className="text-lg font-medium text-gray-900 mb-2">No events found</h3>
-                <p className="text-gray-500">
+                <h3 className="text-lg font-heading font-medium text-foreground mb-2">No events found</h3>
+                <p className="text-muted-foreground">
                   {authStatus?.isAuthenticated
                     ? "Try syncing your calendar to fetch events"
                     : "Connect your Google Calendar to see events"}
                 </p>
               </div>
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
         {/* Logout Confirmation Modal */}
-        {showLogoutConfirm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                Confirm Logout & Data Deletion
-              </h3>
-              <p className="text-gray-600 mb-6">
+        <Dialog open={showLogoutConfirm} onOpenChange={setShowLogoutConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Confirm Logout & Data Deletion</DialogTitle>
+              <DialogDescription>
                 This will permanently delete all your data including:
-              </p>
-              <ul className="list-disc list-inside text-sm text-gray-600 mb-6 space-y-1">
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
                 <li>Your user account</li>
                 <li>All synced calendar events</li>
                 <li>OAuth tokens and sessions</li>
               </ul>
-              <p className="text-red-600 text-sm font-medium mb-6">
-                This action cannot be undone.
-              </p>
-              <div className="flex space-x-3">
-                <button
-                  onClick={() => setShowLogoutConfirm(false)}
-                  disabled={isLoggingOut}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 font-medium transition-colors disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleLogout}
-                  disabled={isLoggingOut}
-                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md font-medium transition-colors disabled:opacity-50"
-                >
-                  {isLoggingOut ? 'Deleting...' : 'Delete All Data'}
-                </button>
-              </div>
+              <Alert variant="destructive">
+                <AlertDescription className="text-sm font-bold">
+                  This action cannot be undone.
+                </AlertDescription>
+              </Alert>
             </div>
-          </div>
-        )}
+            <DialogFooter className="flex space-x-3">
+              <Button
+                onClick={() => setShowLogoutConfirm(false)}
+                disabled={isLoggingOut}
+                variant="outline"
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleLogout}
+                disabled={isLoggingOut}
+                variant="destructive"
+                className="flex-1"
+              >
+                {isLoggingOut ? 'Deleting...' : 'Delete All Data'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
